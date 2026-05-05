@@ -1,5 +1,6 @@
 require("dotenv").config();
 
+const http = require("http");
 const fs = require("fs");
 const path = require("path");
 
@@ -8,6 +9,31 @@ const {
   GatewayIntentBits,
   PermissionsBitField
 } = require("discord.js");
+
+/**
+ * Mini serveur HTTP obligatoire pour certains hébergements web Node.js.
+ * Ça évite qu'Hostinger considère l'application comme inactive.
+ */
+const PORT = process.env.PORT || 3000;
+
+http.createServer((req, res) => {
+  res.writeHead(200, { "Content-Type": "text/plain; charset=utf-8" });
+  res.end("Herve_RABS bot is running.");
+}).listen(PORT, () => {
+  console.log(`Serveur HTTP actif sur le port ${PORT}`);
+});
+
+/**
+ * Protections anti-crash.
+ * Une erreur non gérée ne doit pas forcément couper tout le bot.
+ */
+process.on("unhandledRejection", (reason) => {
+  console.error("Unhandled Rejection :", reason);
+});
+
+process.on("uncaughtException", (error) => {
+  console.error("Uncaught Exception :", error);
+});
 
 const DISCORD_TOKEN = process.env.DISCORD_TOKEN;
 const OPENROUTER_API_KEY = process.env.OPENROUTER_API_KEY;
@@ -389,9 +415,13 @@ ${(memoire.recent.responses || []).join(" / ") || "Aucune"}
 }
 
 async function appelerOpenRouter(messages, maxTokens = 180, temperature = 0.85) {
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 20000);
+
   try {
     const response = await fetch("https://openrouter.ai/api/v1/chat/completions", {
       method: "POST",
+      signal: controller.signal,
       headers: {
         "Authorization": `Bearer ${OPENROUTER_API_KEY}`,
         "Content-Type": "application/json",
@@ -406,6 +436,8 @@ async function appelerOpenRouter(messages, maxTokens = 180, temperature = 0.85) 
       })
     });
 
+    clearTimeout(timeout);
+
     if (!response.ok) {
       const erreur = await response.text();
       console.error("Erreur OpenRouter :", erreur);
@@ -415,6 +447,7 @@ async function appelerOpenRouter(messages, maxTokens = 180, temperature = 0.85) 
     const data = await response.json();
     return data?.choices?.[0]?.message?.content?.trim() || "";
   } catch (error) {
+    clearTimeout(timeout);
     console.error("Erreur appel OpenRouter :", error);
     throw error;
   }
@@ -1074,4 +1107,6 @@ Exemples mémoire :
   }
 });
 
-client.login(DISCORD_TOKEN);
+client.login(DISCORD_TOKEN).catch((error) => {
+  console.error("Erreur connexion Discord :", error);
+});
