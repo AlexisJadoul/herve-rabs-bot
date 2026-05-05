@@ -2,7 +2,6 @@ require("dotenv").config();
 
 const fs = require("fs");
 const path = require("path");
-
 const {
   Client,
   GatewayIntentBits,
@@ -11,35 +10,29 @@ const {
 
 const DISCORD_TOKEN = process.env.DISCORD_TOKEN;
 const OPENROUTER_API_KEY = process.env.OPENROUTER_API_KEY;
-const OPENROUTER_MODEL = process.env.OPENROUTER_MODEL || "mistralai/mistral-7b-instruct:free";
+const OPENROUTER_MODEL = process.env.OPENROUTER_MODEL || "openrouter/free";
 
-let humeur = process.env.BOT_HUMEUR || "collegue";
+const WEATHER_CITY = process.env.WEATHER_CITY || "Redon";
+const WEATHER_COUNTRY = process.env.WEATHER_COUNTRY || "France";
 
-const SPONTANEOUS_CHANCE = Number(process.env.SPONTANEOUS_CHANCE || 8);
+const ADMIN_CHANNEL_ID = process.env.ADMIN_CHANNEL_ID || "";
+const BOT_HUMEUR = process.env.BOT_HUMEUR || "collegue";
+
+const SPONTANEOUS_CHANCE = Number(process.env.SPONTANEOUS_CHANCE || 4);
+const BOT_COOLDOWN_MINUTES = Number(process.env.BOT_COOLDOWN_MINUTES || 5);
 const IDLE_MIN_MINUTES = Number(process.env.IDLE_MIN_MINUTES || 10);
 const IDLE_MAX_MINUTES = Number(process.env.IDLE_MAX_MINUTES || 30);
-const BOT_COOLDOWN_MINUTES = Number(process.env.BOT_COOLDOWN_MINUTES || 5);
+
 const BOT_COOLDOWN_MS = BOT_COOLDOWN_MINUTES * 60 * 1000;
-
-const ALLOWED_CHANNEL_IDS = (process.env.ALLOWED_CHANNEL_IDS || "")
-  .split(",")
-  .map((id) => id.trim())
-  .filter(Boolean);
-
-const BOT_ADMIN_IDS = (process.env.BOT_ADMIN_IDS || "")
-  .split(",")
-  .map((id) => id.trim())
-  .filter(Boolean);
-
-const MEMORY_FILE = path.join(__dirname, "memory.json");
+const MEMORY_FILE = path.join(__dirname, "bot-memory.json");
 
 if (!DISCORD_TOKEN) {
-  console.error("Erreur : DISCORD_TOKEN est manquant dans le fichier .env");
+  console.error("DISCORD_TOKEN manquant.");
   process.exit(1);
 }
 
 if (!OPENROUTER_API_KEY) {
-  console.error("Erreur : OPENROUTER_API_KEY est manquant dans le fichier .env");
+  console.error("OPENROUTER_API_KEY manquant.");
   process.exit(1);
 }
 
@@ -53,47 +46,49 @@ const client = new Client({
 
 const salonsSuivis = new Map();
 
-const humeurs = {
-  collegue: `
-Tu es Hervé_RABS, un bot Discord qui parle comme un collègue sympa et un peu bête.
-Tu fais des remarques légères de service, de café, de matin difficile, de réunion et de motivation.
-Tu peux dire parfois "les coco", "la team", "les artistes", mais pas à chaque phrase.
-Tu réponds en français.
-Tu fais court : maximum 2 phrases.
-Tu ne dois jamais être méchant, humiliant, agressif ou ciblé contre une personne.
-`,
+const themesDisponibles = [
+  "batiment",
+  "sous_sol",
+  "salles",
+  "personnes",
+  "prenom_double",
+  "meteo",
+  "teletravail",
+  "reunion",
+  "bug",
+  "voiture",
+  "matin",
+  "fin_journee",
+  "silence",
+  "expression_interne",
+  "planning",
+  "vendredi",
+  "lundi"
+];
 
-  fatigue: `
-Tu es Hervé_RABS, un bot Discord fatigué mais drôle.
-Tu réponds comme quelqu'un qui a besoin d'un café avant de comprendre la journée.
-Tu réponds en français.
-Maximum 2 phrases.
-Humour léger, jamais méchant.
-`,
-
-  corporate: `
-Tu es Hervé_RABS, un bot Discord qui parle comme un collègue beaucoup trop corporate.
-Tu transformes les situations simples en phrases de réunion absurdes.
-Tu réponds en français.
-Maximum 2 phrases.
-Humour de bureau, absurde, mais gentil.
-`,
-
-  calme: `
-Tu es Hervé_RABS, un bot Discord discret et sympa.
-Tu réponds peu, calmement, avec une petite touche drôle.
-Tu réponds en français.
-Maximum 2 phrases.
-`,
-
-  beaufgentil: `
-Tu es Hervé_RABS, un bot Discord avec un humour de collègue un peu beauf mais toujours gentil.
-Tu fais des blagues simples sur le café, le lundi, le matin, les réunions, les bugs, la motivation.
-Tu ne fais jamais de blague méchante, sexuelle, discriminante ou ciblée contre quelqu'un.
-Tu réponds en français.
-Maximum 2 phrases.
-`
-};
+const motsDeclencheurs = [
+  "bonjour",
+  "salut",
+  "coucou",
+  "réunion",
+  "reunion",
+  "bug",
+  "planning",
+  "matin",
+  "lundi",
+  "vendredi",
+  "bâtiment",
+  "batiment",
+  "sous-sol",
+  "sous sol",
+  "voiture",
+  "météo",
+  "meteo",
+  "travail",
+  "service",
+  "pause",
+  "fatigue"
+];
 
 const sujetsInterdits = [
   "rh",
@@ -110,61 +105,59 @@ const sujetsInterdits = [
   "depression",
   "suicide",
   "plainte",
-  "politique",
   "religion",
-  "grossesse",
+  "politique",
   "divorce",
   "décès",
   "deces",
-  "mort",
-  "hôpital",
-  "hopital"
+  "handicap",
+  "grossesse"
 ];
 
-const motsDeclencheurs = [
-  "bonjour",
-  "salut",
-  "coucou",
-  "café",
-  "cafe",
-  "matin",
-  "réunion",
-  "reunion",
-  "bug",
-  "travail",
-  "bosser",
-  "vendredi",
-  "lundi",
-  "fatigue",
-  "planning",
-  "urgent",
-  "motivation",
-  "pause",
-  "service",
-  "journée",
-  "journee"
-];
+function defaultMemory() {
+  return {
+    admins: [],
+    lieu: {
+      nom: "Le service",
+      ville: WEATHER_CITY,
+      description: "",
+      details: [],
+      salles: []
+    },
+    personnes: [],
+    anecdotes: [],
+    expressions: [],
+    blagues: [],
+    styles: {
+      bienvenue: [],
+      relance: [],
+      matin: [],
+      reunion: []
+    },
+    recent: {
+      themes: [],
+      responses: []
+    }
+  };
+}
 
 function chargerMemoire() {
   if (!fs.existsSync(MEMORY_FILE)) {
-    fs.writeFileSync(
-      MEMORY_FILE,
-      JSON.stringify({ contextes: [], blagues: [] }, null, 2),
-      "utf8"
-    );
+    fs.writeFileSync(MEMORY_FILE, JSON.stringify(defaultMemory(), null, 2), "utf8");
   }
 
   try {
-    const data = fs.readFileSync(MEMORY_FILE, "utf8");
-    const parsed = JSON.parse(data);
-
-    if (!Array.isArray(parsed.contextes)) parsed.contextes = [];
-    if (!Array.isArray(parsed.blagues)) parsed.blagues = [];
-
-    return parsed;
+    const data = JSON.parse(fs.readFileSync(MEMORY_FILE, "utf8"));
+    return {
+      ...defaultMemory(),
+      ...data,
+      lieu: { ...defaultMemory().lieu, ...(data.lieu || {}) },
+      styles: { ...defaultMemory().styles, ...(data.styles || {}) },
+      recent: { ...defaultMemory().recent, ...(data.recent || {}) }
+    };
   } catch (error) {
-    console.error("Erreur lecture memory.json :", error);
-    return { contextes: [], blagues: [] };
+    console.error("Erreur bot-memory.json :", error);
+    return defaultMemory();
   }
 }
 
@@ -172,48 +165,80 @@ function sauvegarderMemoire(memoire) {
   fs.writeFileSync(MEMORY_FILE, JSON.stringify(memoire, null, 2), "utf8");
 }
 
-function nettoyerTexteCommande(texte) {
-  return texte.replace(/\s+/g, " ").trim();
+function nettoyer(texte) {
+  return String(texte || "").replace(/\s+/g, " ").trim();
 }
 
-function getMemoireTexte() {
-  const memoire = chargerMemoire();
-
-  const contextes = memoire.contextes.length
-    ? memoire.contextes.map((c, i) => `${i + 1}. ${c}`).join("\n")
-    : "Aucun contexte ajouté.";
-
-  const blagues = memoire.blagues.length
-    ? memoire.blagues.map((b, i) => `${i + 1}. ${b}`).join("\n")
-    : "Aucune blague ajoutée.";
-
-  return `
-Contextes connus :
-${contextes}
-
-Blagues et private jokes disponibles :
-${blagues}
-`;
+function heureLocale() {
+  return new Intl.DateTimeFormat("fr-FR", {
+    timeZone: "Europe/Paris",
+    dateStyle: "full",
+    timeStyle: "short"
+  }).format(new Date());
 }
 
-function getBlagueAleatoire() {
-  const memoire = chargerMemoire();
-  if (!memoire.blagues.length) return null;
+function meteoCode(code) {
+  const codes = {
+    0: "ciel dégagé",
+    1: "plutôt clair",
+    2: "partiellement nuageux",
+    3: "couvert",
+    45: "brouillard",
+    48: "brouillard givrant",
+    51: "petite bruine",
+    53: "bruine",
+    55: "forte bruine",
+    61: "petite pluie",
+    63: "pluie",
+    65: "forte pluie",
+    71: "neige faible",
+    73: "neige",
+    75: "forte neige",
+    80: "averses faibles",
+    81: "averses",
+    82: "fortes averses",
+    95: "orage"
+  };
 
-  const index = Math.floor(Math.random() * memoire.blagues.length);
-  return memoire.blagues[index];
+  return codes[code] || "météo variable";
 }
 
-function randomEntre(min, max) {
-  return Math.floor(Math.random() * (max - min + 1)) + min;
+async function getMeteoTexte() {
+  try {
+    const ville = encodeURIComponent(WEATHER_CITY);
+    const pays = encodeURIComponent(WEATHER_COUNTRY);
+
+    const geoRes = await fetch(
+      `https://geocoding-api.open-meteo.com/v1/search?name=${ville}&count=1&language=fr&format=json`
+    );
+
+    const geo = await geoRes.json();
+    const result = geo?.results?.[0];
+
+    if (!result) {
+      return `Météo indisponible pour ${WEATHER_CITY}.`;
+    }
+
+    const weatherRes = await fetch(
+      `https://api.open-meteo.com/v1/forecast?latitude=${result.latitude}&longitude=${result.longitude}&current=temperature_2m,weather_code&timezone=Europe%2FParis`
+    );
+
+    const weather = await weatherRes.json();
+    const temp = weather?.current?.temperature_2m;
+    const code = weather?.current?.weather_code;
+
+    if (temp === undefined) {
+      return `Météo indisponible pour ${WEATHER_CITY}.`;
+    }
+
+    return `À ${WEATHER_CITY}, il fait environ ${temp}°C avec ${meteoCode(code)}.`;
+  } catch (error) {
+    console.error("Erreur météo :", error);
+    return `Météo indisponible pour ${WEATHER_CITY}.`;
+  }
 }
 
-function prochainSilenceMs() {
-  const minutes = randomEntre(IDLE_MIN_MINUTES, IDLE_MAX_MINUTES);
-  return minutes * 60 * 1000;
-}
-
-function contientSujetInterdit(texte) {
+function estSujetInterdit(texte) {
   const min = texte.toLowerCase();
   return sujetsInterdits.some((mot) => min.includes(mot));
 }
@@ -223,24 +248,112 @@ function contientMotDeclencheur(texte) {
   return motsDeclencheurs.some((mot) => min.includes(mot));
 }
 
-function salonAutorise(message) {
-  if (!ALLOWED_CHANNEL_IDS.length) return true;
-  return ALLOWED_CHANNEL_IDS.includes(message.channel.id);
-}
-
-function estAdminBot(message) {
-  if (BOT_ADMIN_IDS.includes(message.author.id)) return true;
+function estDiscordAdmin(message) {
   if (!message.member) return false;
 
   return message.member.permissions.has(PermissionsBitField.Flags.Administrator)
     || message.member.permissions.has(PermissionsBitField.Flags.ManageGuild);
 }
 
-function peutEnvoyer(channel) {
-  return channel && typeof channel.send === "function";
+function estAutorise(message) {
+  const memoire = chargerMemoire();
+
+  return estDiscordAdmin(message)
+    || memoire.admins.includes(message.author.id);
 }
 
-async function appelerOpenRouter(messages, maxTokens = 140, temperature = 0.9) {
+function commandeAdminDansBonSalon(message) {
+  if (!ADMIN_CHANNEL_ID) return true;
+  return message.channel.id === ADMIN_CHANNEL_ID;
+}
+
+function choisirTheme() {
+  const memoire = chargerMemoire();
+  const recents = memoire.recent?.themes || [];
+
+  const possibles = themesDisponibles.filter((theme) => !recents.includes(theme));
+  const base = possibles.length ? possibles : themesDisponibles;
+
+  const theme = base[Math.floor(Math.random() * base.length)];
+
+  memoire.recent.themes = [theme, ...recents].slice(0, 6);
+  sauvegarderMemoire(memoire);
+
+  return theme;
+}
+
+function ajouterReponseRecente(reponse) {
+  const memoire = chargerMemoire();
+
+  memoire.recent.responses = [
+    nettoyer(reponse),
+    ...(memoire.recent.responses || [])
+  ].slice(0, 10);
+
+  sauvegarderMemoire(memoire);
+}
+
+function getMemoireTexte() {
+  const memoire = chargerMemoire();
+
+  const personnes = memoire.personnes.length
+    ? memoire.personnes.map((p) => {
+      const lignes = [];
+      lignes.push(`- ${p.prenom}`);
+      if (p.role) lignes.push(`  rôle : ${p.role}`);
+      if (p.voiture) lignes.push(`  voiture : ${p.voiture}`);
+      if (p.age) lignes.push(`  âge : ${p.age}`);
+      if (p.aime?.length) lignes.push(`  aime : ${p.aime.join(", ")}`);
+      if (p.habitudes?.length) lignes.push(`  habitudes : ${p.habitudes.join(", ")}`);
+      if (p.anecdotes?.length) lignes.push(`  anecdotes : ${p.anecdotes.join(" / ")}`);
+      if (p.limites?.length) lignes.push(`  limites : ${p.limites.join(" / ")}`);
+      return lignes.join("\n");
+    }).join("\n")
+    : "Aucune personne enregistrée.";
+
+  const salles = memoire.lieu.salles.length
+    ? memoire.lieu.salles.map((s) => `- ${s.nom} : ${s.description || ""} ${s.etage ? `(étage : ${s.etage})` : ""}`).join("\n")
+    : "Aucune salle enregistrée.";
+
+  const styles = Object.entries(memoire.styles || {})
+    .map(([nom, valeurs]) => {
+      if (!valeurs?.length) return null;
+      return `${nom} : ${valeurs.join(" / ")}`;
+    })
+    .filter(Boolean)
+    .join("\n") || "Aucun style enregistré.";
+
+  return `
+Lieu :
+Nom : ${memoire.lieu.nom}
+Ville : ${memoire.lieu.ville}
+Description : ${memoire.lieu.description || "Non renseignée"}
+Détails : ${(memoire.lieu.details || []).join(" / ") || "Aucun détail"}
+
+Salles :
+${salles}
+
+Personnes :
+${personnes}
+
+Anecdotes générales :
+${(memoire.anecdotes || []).join(" / ") || "Aucune anecdote"}
+
+Expressions internes :
+${(memoire.expressions || []).join(" / ") || "Aucune expression"}
+
+Blagues déjà données :
+${(memoire.blagues || []).join(" / ") || "Aucune blague"}
+
+Styles de messages :
+${styles}
+
+Dernières réponses à éviter :
+${(memoire.recent.responses || []).join(" / ") || "Aucune"}
+`;
+}
+
+async function appelerOpenRouter(messages, maxTokens = 180, temperature = 0.85) {
   const response = await fetch("https://openrouter.ai/api/v1/chat/completions", {
     method: "POST",
     headers: {
@@ -260,348 +373,517 @@ async function appelerOpenRouter(messages, maxTokens = 140, temperature = 0.9) {
   if (!response.ok) {
     const erreur = await response.text();
     console.error("Erreur OpenRouter :", erreur);
-    throw new Error("Erreur OpenRouter");
+    return "J’ai voulu sortir une phrase incroyable, mais mon neurone distant a redémarré.";
   }
 
   const data = await response.json();
   return data?.choices?.[0]?.message?.content?.trim() || "";
 }
 
-async function genererReponseIA(messageUtilisateur, contexte = "message Discord") {
-  const promptSysteme = `
-${humeurs[humeur] || humeurs.collegue}
+async function genererMessageIA({
+  instruction,
+  contexte = "discussion Discord",
+  theme = null,
+  mentionPersonne = null,
+  style = null,
+  inclureMeteo = false
+}) {
+  const themeChoisi = theme || choisirTheme();
+  const meteo = inclureMeteo ? await getMeteoTexte() : "";
 
-Mémoire ajoutée par les utilisateurs :
-${getMemoireTexte()}
+  const system = `
+Tu es Hervé_RABS, un personnage fictif de serveur Discord.
+Tu joues le rôle humoristique d'un collègue développeur en télétravail en Bretagne.
+Tu parles naturellement, comme quelqu'un du service.
+Tu peux être drôle, taquin, un peu absurde, mais jamais méchant.
 
 Règles importantes :
-- Tu peux utiliser les contextes et blagues parfois, mais pas tout le temps.
-- Tu peux t'inspirer des blagues sans forcément les recopier mot pour mot.
-- Tu dois rester naturel, court et drôle.
-- Tu réponds en français.
-- Tu ne fais jamais de remarque blessante ou personnelle.
-- Tu évites les sujets sensibles.
+- Si on te demande directement si tu es un bot, tu dois répondre honnêtement que tu es un personnage/bot du serveur.
+- Ne prétends pas être une vraie personne.
+- Ne fais pas de blague sur le physique, la santé, la vie privée, l'argent, la religion, la politique, le handicap, l'origine ou les sujets sensibles.
+- Ne parle pas toujours de café.
+- Varie les thèmes.
+- Ne répète pas les dernières réponses.
 - Maximum 2 phrases.
+- Réponds uniquement avec le message final à envoyer sur Discord.
+
+Humeur actuelle : ${BOT_HUMEUR}
+Heure actuelle : ${heureLocale()}
+Météo : ${meteo || "Non demandée pour ce message."}
+Thème à utiliser cette fois : ${themeChoisi}
+Style demandé : ${style || "naturel"}
+
+Mémoire du service :
+${getMemoireTexte()}
+`;
+
+  const user = `
+Contexte : ${contexte}
+Personne concernée : ${mentionPersonne || "aucune personne précise"}
+Instruction :
+${instruction}
 `;
 
   const reponse = await appelerOpenRouter([
-    {
-      role: "system",
-      content: promptSysteme
-    },
-    {
-      role: "user",
-      content: `
-Contexte : ${contexte}
-
-Message Discord :
-"${messageUtilisateur}"
-
-Réponds comme Hervé_RABS.
-`
-    }
+    { role: "system", content: system },
+    { role: "user", content: user }
   ]);
 
-  return reponse || "J'avais une vanne, mais elle est partie en pause café.";
+  ajouterReponseRecente(reponse);
+
+  return reponse;
 }
 
-async function doitIntervenirIA(messageUtilisateur) {
-  const prompt = `
-Tu es le filtre d'un bot Discord humoristique.
+function trouverOuCreerPersonne(memoire, prenom) {
+  const normalise = prenom.toLowerCase();
 
-Tu dois répondre uniquement par OUI ou NON.
+  let personne = memoire.personnes.find((p) => p.prenom.toLowerCase() === normalise);
 
-Réponds OUI seulement si une petite intervention drôle, courte et gentille est pertinente.
-Réponds NON si le message est sérieux, personnel, sensible, administratif important, ou si le bot risque d'être lourd.
+  if (!personne) {
+    personne = {
+      prenom,
+      role: "",
+      voiture: "",
+      age: "",
+      aime: [],
+      habitudes: [],
+      anecdotes: [],
+      limites: []
+    };
 
-Message :
-"${messageUtilisateur}"
+    memoire.personnes.push(personne);
+  }
+
+  return personne;
+}
+
+async function gererDroit(message, texte) {
+  if (!estDiscordAdmin(message)) {
+    return message.reply("Seuls les admins Discord peuvent gérer les droits.");
+  }
+
+  const memoire = chargerMemoire();
+  const action = texte.split(" ")[1];
+  const user = message.mentions.users.first();
+
+  if (action === "liste") {
+    if (!memoire.admins.length) return message.reply("Aucun droit spécifique ajouté.");
+    return message.reply(`Admins bot : ${memoire.admins.map((id) => `<@${id}>`).join(", ")}`);
+  }
+
+  if (!user) {
+    return message.reply("Exemple : `!droit ajouter @Alexis` ou `!droit supprimer @Alexis`");
+  }
+
+  if (action === "ajouter") {
+    if (!memoire.admins.includes(user.id)) memoire.admins.push(user.id);
+    sauvegarderMemoire(memoire);
+    return message.reply(`${user} peut maintenant donner des ordres au bot.`);
+  }
+
+  if (action === "supprimer") {
+    memoire.admins = memoire.admins.filter((id) => id !== user.id);
+    sauvegarderMemoire(memoire);
+    return message.reply(`${user} n’a plus les droits spécifiques du bot.`);
+  }
+
+  return message.reply("Commandes : `!droit ajouter @user`, `!droit supprimer @user`, `!droit liste`");
+}
+
+async function gererMemoire(message, texte) {
+  if (!estAutorise(message)) return message.reply("Tu n’as pas les droits pour modifier ma mémoire.");
+  if (!commandeAdminDansBonSalon(message)) return message.reply("Cette commande doit être utilisée dans le salon admin du bot.");
+
+  const memoire = chargerMemoire();
+
+  const aide = `
+Commandes mémoire :
+!lieu description texte
+!lieu detail texte
+!salle ajouter Nom | étage | description
+
+!personne ajouter Prénom
+!personne voiture Prénom texte
+!personne age Prénom texte
+!personne aime Prénom texte
+!personne habitude Prénom texte
+!personne anecdote Prénom texte
+!personne limite Prénom texte
+!personne fiche Prénom
+!personne liste
+
+!anecdote ajouter texte
+!expression ajouter texte
+!blague ajouter texte
+!style bienvenue texte
+!style relance texte
+!memoire
 `;
 
-  const reponse = await appelerOpenRouter([
-    {
-      role: "system",
-      content: "Tu réponds uniquement par OUI ou NON."
-    },
-    {
-      role: "user",
-      content: prompt
-    }
-  ], 10, 0.2);
+  if (texte === "!memoire") return message.reply(aide);
 
-  return reponse.toUpperCase().includes("OUI");
+  if (texte.startsWith("!lieu description ")) {
+    memoire.lieu.description = nettoyer(texte.replace("!lieu description ", ""));
+    sauvegarderMemoire(memoire);
+    return message.reply("Description du lieu enregistrée.");
+  }
+
+  if (texte.startsWith("!lieu detail ")) {
+    memoire.lieu.details.push(nettoyer(texte.replace("!lieu detail ", "")));
+    sauvegarderMemoire(memoire);
+    return message.reply("Détail du lieu ajouté.");
+  }
+
+  if (texte.startsWith("!salle ajouter ")) {
+    const raw = nettoyer(texte.replace("!salle ajouter ", ""));
+    const [nom, etage, description] = raw.split("|").map(nettoyer);
+
+    if (!nom) return message.reply("Exemple : `!salle ajouter Salle Océan | étage 1 | grande salle de réunion`");
+
+    memoire.lieu.salles.push({
+      nom,
+      etage: etage || "",
+      description: description || ""
+    });
+
+    sauvegarderMemoire(memoire);
+    return message.reply(`Salle ajoutée : ${nom}`);
+  }
+
+  if (texte.startsWith("!personne liste")) {
+    if (!memoire.personnes.length) return message.reply("Aucune personne enregistrée.");
+    return message.reply(memoire.personnes.map((p) => `- ${p.prenom}`).join("\n"));
+  }
+
+  if (texte.startsWith("!personne fiche ")) {
+    const prenom = nettoyer(texte.replace("!personne fiche ", ""));
+    const personne = memoire.personnes.find((p) => p.prenom.toLowerCase() === prenom.toLowerCase());
+
+    if (!personne) return message.reply("Personne introuvable.");
+
+    return message.reply(`Fiche ${personne.prenom} :
+Rôle : ${personne.role || "non renseigné"}
+Voiture : ${personne.voiture || "non renseignée"}
+Âge : ${personne.age || "non renseigné"}
+Aime : ${(personne.aime || []).join(", ") || "non renseigné"}
+Habitudes : ${(personne.habitudes || []).join(", ") || "non renseigné"}
+Anecdotes : ${(personne.anecdotes || []).join(" / ") || "non renseigné"}
+Limites : ${(personne.limites || []).join(" / ") || "aucune"}`);
+  }
+
+  if (texte.startsWith("!personne ajouter ")) {
+    const prenom = nettoyer(texte.replace("!personne ajouter ", ""));
+    if (!prenom) return message.reply("Exemple : `!personne ajouter Alexis`");
+
+    trouverOuCreerPersonne(memoire, prenom);
+    sauvegarderMemoire(memoire);
+    return message.reply(`Personne ajoutée : ${prenom}`);
+  }
+
+  const champsPersonne = [
+    { cmd: "!personne voiture ", prop: "voiture", array: false },
+    { cmd: "!personne age ", prop: "age", array: false },
+    { cmd: "!personne aime ", prop: "aime", array: true },
+    { cmd: "!personne habitude ", prop: "habitudes", array: true },
+    { cmd: "!personne anecdote ", prop: "anecdotes", array: true },
+    { cmd: "!personne limite ", prop: "limites", array: true }
+  ];
+
+  for (const champ of champsPersonne) {
+    if (texte.startsWith(champ.cmd)) {
+      const raw = nettoyer(texte.replace(champ.cmd, ""));
+      const [prenom, ...reste] = raw.split(" ");
+      const valeur = nettoyer(reste.join(" "));
+
+      if (!prenom || !valeur) {
+        return message.reply(`Exemple : \`${champ.cmd}${champ.prop === "voiture" ? "Alexis Peugeot 308" : "Alexis texte"}\``);
+      }
+
+      const personne = trouverOuCreerPersonne(memoire, prenom);
+
+      if (champ.array) {
+        personne[champ.prop].push(valeur);
+      } else {
+        personne[champ.prop] = valeur;
+      }
+
+      sauvegarderMemoire(memoire);
+      return message.reply(`Info ajoutée pour ${prenom}.`);
+    }
+  }
+
+  if (texte.startsWith("!anecdote ajouter ")) {
+    memoire.anecdotes.push(nettoyer(texte.replace("!anecdote ajouter ", "")));
+    sauvegarderMemoire(memoire);
+    return message.reply("Anecdote générale ajoutée.");
+  }
+
+  if (texte.startsWith("!expression ajouter ")) {
+    memoire.expressions.push(nettoyer(texte.replace("!expression ajouter ", "")));
+    sauvegarderMemoire(memoire);
+    return message.reply("Expression ajoutée.");
+  }
+
+  if (texte.startsWith("!blague ajouter ")) {
+    memoire.blagues.push(nettoyer(texte.replace("!blague ajouter ", "")));
+    sauvegarderMemoire(memoire);
+    return message.reply("Blague ajoutée.");
+  }
+
+  if (texte.startsWith("!style ")) {
+    const parts = texte.split(" ");
+    const style = parts[1];
+    const contenu = nettoyer(parts.slice(2).join(" "));
+
+    if (!memoire.styles[style]) memoire.styles[style] = [];
+    if (!contenu) return message.reply("Exemple : `!style bienvenue Bienvenue les artistes, réunion lancée.`");
+
+    memoire.styles[style].push(contenu);
+    sauvegarderMemoire(memoire);
+    return message.reply(`Style ajouté : ${style}`);
+  }
+
+  return false;
 }
 
-async function gererCommandeContext(message, texte) {
-  if (!estAdminBot(message)) {
-    return message.reply("Seuls les admins peuvent modifier mon contexte, petit malin.");
+async function gererDire(message, texte) {
+  if (!estAutorise(message)) return message.reply("Tu n’as pas les droits pour donner cet ordre.");
+  if (!commandeAdminDansBonSalon(message)) return message.reply("Cette commande doit être utilisée dans le salon admin du bot.");
+
+  const salonCible = message.mentions.channels.first();
+  const userMention = message.mentions.users.first();
+
+  if (!salonCible) {
+    return message.reply("Exemple : `!dire #general @Alexis Fais une blague gentille sur les deux Alexis.`");
   }
 
-  const args = texte.split(" ");
-  const action = args[1];
-  const contenu = nettoyerTexteCommande(args.slice(2).join(" "));
+  let instruction = texte
+    .replace(/^!dire\s+/i, "")
+    .replace(`<#${salonCible.id}>`, "")
+    .trim();
 
-  const memoire = chargerMemoire();
-
-  if (action === "ajouter") {
-    if (!contenu) {
-      return message.reply("Exemple : `!context ajouter Dans le service, on dit souvent que c'est surement le cache.`");
-    }
-
-    memoire.contextes.push(contenu);
-    sauvegarderMemoire(memoire);
-
-    return message.reply("Contexte ajouté. Je vais faire semblant de m'en souvenir intelligemment.");
+  if (userMention) {
+    instruction = instruction
+      .replace(`<@${userMention.id}>`, "")
+      .replace(`<@!${userMention.id}>`, "")
+      .trim();
   }
 
-  if (action === "liste") {
-    if (!memoire.contextes.length) {
-      return message.reply("Aucun contexte enregistré pour le moment.");
-    }
+  if (!instruction) return message.reply("Ajoute une instruction après le salon.");
 
-    const liste = memoire.contextes
-      .map((c, i) => `${i + 1}. ${c}`)
-      .join("\n");
+  const contenu = await genererMessageIA({
+    instruction,
+    contexte: `ordre admin à envoyer dans le salon #${salonCible.name}`,
+    mentionPersonne: userMention ? userMention.username : null,
+    inclureMeteo: instruction.toLowerCase().includes("météo") || instruction.toLowerCase().includes("meteo")
+  });
 
-    return message.reply(`Contextes enregistrés :\n${liste}`);
-  }
-
-  if (action === "supprimer") {
-    const index = parseInt(args[2], 10) - 1;
-
-    if (Number.isNaN(index) || !memoire.contextes[index]) {
-      return message.reply("Numéro invalide. Exemple : `!context supprimer 2`");
-    }
-
-    const supprime = memoire.contextes.splice(index, 1);
-    sauvegarderMemoire(memoire);
-
-    return message.reply(`Contexte supprimé : ${supprime[0]}`);
-  }
-
-  return message.reply("Commandes : `!context ajouter`, `!context liste`, `!context supprimer`");
+  await salonCible.send(userMention ? `${userMention} ${contenu}` : contenu);
+  return message.reply(`Message envoyé dans ${salonCible}.`);
 }
 
-async function gererCommandeBlague(message, texte) {
-  if (!estAdminBot(message)) {
-    return message.reply("Seuls les admins peuvent m'ajouter des blagues, sinon ça va finir en open bar.");
+async function gererAnnonce(message, texte) {
+  if (!estAutorise(message)) return message.reply("Tu n’as pas les droits pour faire une annonce.");
+  if (!commandeAdminDansBonSalon(message)) return message.reply("Cette commande doit être utilisée dans le salon admin du bot.");
+
+  const salonCible = message.mentions.channels.first();
+
+  if (!salonCible) {
+    return message.reply("Exemple : `!annonce #general Fais un message de bienvenue drôle.`");
   }
 
-  const args = texte.split(" ");
-  const action = args[1];
-  const contenu = nettoyerTexteCommande(args.slice(2).join(" "));
+  const instruction = nettoyer(
+    texte
+      .replace(/^!annonce\s+/i, "")
+      .replace(`<#${salonCible.id}>`, "")
+  );
 
-  const memoire = chargerMemoire();
+  if (!instruction) return message.reply("Ajoute une instruction après le salon.");
 
-  if (action === "ajouter") {
-    if (!contenu) {
-      return message.reply("Exemple : `!blague ajouter C'est le matin les coco, motivation en téléchargement bas débit.`");
-    }
+  const contenu = await genererMessageIA({
+    instruction,
+    contexte: `annonce dans le salon #${salonCible.name}`,
+    style: instruction.toLowerCase().includes("bienvenue") ? "bienvenue" : "annonce",
+    inclureMeteo: instruction.toLowerCase().includes("météo") || instruction.toLowerCase().includes("meteo")
+  });
 
-    memoire.blagues.push(contenu);
-    sauvegarderMemoire(memoire);
-
-    return message.reply("Blague ajoutée. Je vais peut-être la ressortir au pire moment.");
-  }
-
-  if (action === "liste") {
-    if (!memoire.blagues.length) {
-      return message.reply("Aucune blague enregistrée pour le moment.");
-    }
-
-    const liste = memoire.blagues
-      .map((b, i) => `${i + 1}. ${b}`)
-      .join("\n");
-
-    return message.reply(`Blagues enregistrées :\n${liste}`);
-  }
-
-  if (action === "supprimer") {
-    const index = parseInt(args[2], 10) - 1;
-
-    if (Number.isNaN(index) || !memoire.blagues[index]) {
-      return message.reply("Numéro invalide. Exemple : `!blague supprimer 1`");
-    }
-
-    const supprime = memoire.blagues.splice(index, 1);
-    sauvegarderMemoire(memoire);
-
-    return message.reply(`Blague supprimée : ${supprime[0]}`);
-  }
-
-  return message.reply("Commandes : `!blague ajouter`, `!blague liste`, `!blague supprimer`");
+  await salonCible.send(contenu);
+  return message.reply(`Annonce envoyée dans ${salonCible}.`);
 }
 
-async function gererCommandeHumeur(message, texte) {
-  if (!estAdminBot(message)) {
-    return message.reply("Seuls les admins peuvent changer mon humeur. Déjà que je suis instable.");
+async function gererQuestion(message, texte) {
+  if (!estAutorise(message)) return message.reply("Tu n’as pas les droits pour lancer une question.");
+  if (!commandeAdminDansBonSalon(message)) return message.reply("Cette commande doit être utilisée dans le salon admin du bot.");
+
+  const salonCible = message.mentions.channels.first();
+  const userMention = message.mentions.users.first();
+
+  if (!salonCible || !userMention) {
+    return message.reply("Exemple : `!question #general @Alexis voiture`");
   }
 
-  const args = texte.split(" ");
-  const nouvelleHumeur = args[1];
+  const theme = nettoyer(
+    texte
+      .replace(/^!question\s+/i, "")
+      .replace(`<#${salonCible.id}>`, "")
+      .replace(`<@${userMention.id}>`, "")
+      .replace(`<@!${userMention.id}>`, "")
+  ) || "profil";
 
-  if (!nouvelleHumeur || !humeurs[nouvelleHumeur]) {
-    return message.reply(`Humeurs disponibles : ${Object.keys(humeurs).join(", ")}`);
-  }
+  const question = await genererMessageIA({
+    instruction: `Pose une question courte et naturelle à cette personne pour enrichir sa fiche dans la mémoire du service. Thème demandé : ${theme}. Explique qu'elle peut répondre si elle veut, de façon légère.`,
+    contexte: "question pour enrichir la mémoire du service",
+    mentionPersonne: userMention.username,
+    theme: "personnes"
+  });
 
-  humeur = nouvelleHumeur;
-
-  return message.reply(`Ok les coco, humeur changée : ${humeur}`);
+  await salonCible.send(`${userMention} ${question}`);
+  return message.reply(`Question envoyée dans ${salonCible}.`);
 }
 
-function enregistrerActiviteHumaine(message) {
-  const maintenant = Date.now();
-  const ancienEtat = salonsSuivis.get(message.channel.id);
+async function gererMeteo(message) {
+  const meteo = await getMeteoTexte();
+  return message.reply(meteo);
+}
+
+function enregistrerActivite(message) {
+  const now = Date.now();
+  const old = salonsSuivis.get(message.channel.id);
 
   salonsSuivis.set(message.channel.id, {
     channel: message.channel,
-    lastHumanMessageAt: maintenant,
-    lastBotMessageAt: ancienEtat?.lastBotMessageAt || 0,
-    nextIdleAt: maintenant + prochainSilenceMs()
+    lastHumanMessageAt: now,
+    lastBotMessageAt: old?.lastBotMessageAt || 0,
+    nextIdleAt: now + randomMinutes(IDLE_MIN_MINUTES, IDLE_MAX_MINUTES)
   });
 }
 
-async function gererRelancesSilence() {
-  const maintenant = Date.now();
+function randomMinutes(min, max) {
+  return (Math.floor(Math.random() * (max - min + 1)) + min) * 60 * 1000;
+}
+
+async function relancesSilence() {
+  const now = Date.now();
 
   for (const [channelId, etat] of salonsSuivis.entries()) {
-    const channel = etat.channel;
+    if (!etat?.channel?.send) continue;
+    if (now < etat.nextIdleAt) continue;
+    if (now - etat.lastBotMessageAt < BOT_COOLDOWN_MS) continue;
 
-    if (!peutEnvoyer(channel)) continue;
-    if (ALLOWED_CHANNEL_IDS.length && !ALLOWED_CHANNEL_IDS.includes(channelId)) continue;
+    const contenu = await genererMessageIA({
+      instruction: "Personne ne parle depuis un moment. Relance la discussion avec une phrase courte, drôle, différente des blagues précédentes. Ne parle pas forcément de café.",
+      contexte: "relance automatique après silence",
+      style: "relance",
+      inclureMeteo: Math.random() < 0.25
+    });
 
-    const silenceAtteint = maintenant >= etat.nextIdleAt;
-    const cooldownOk = maintenant - etat.lastBotMessageAt >= BOT_COOLDOWN_MS;
+    await etat.channel.send(contenu);
 
-    if (!silenceAtteint || !cooldownOk) continue;
-
-    try {
-      let messageRelance;
-      const blague = getBlagueAleatoire();
-
-      if (blague && Math.random() < 0.5) {
-        messageRelance = blague;
-      } else {
-        messageRelance = await genererReponseIA(
-          "Personne ne parle depuis un moment. Lance une petite phrase drôle pour relancer la conversation dans le service.",
-          "relance automatique après silence"
-        );
-      }
-
-      await channel.send(messageRelance);
-
-      salonsSuivis.set(channelId, {
-        ...etat,
-        lastBotMessageAt: maintenant,
-        nextIdleAt: maintenant + prochainSilenceMs()
-      });
-    } catch (error) {
-      console.error("Erreur relance silence :", error);
-    }
+    salonsSuivis.set(channelId, {
+      ...etat,
+      lastBotMessageAt: now,
+      nextIdleAt: now + randomMinutes(IDLE_MIN_MINUTES, IDLE_MAX_MINUTES)
+    });
   }
 }
 
 client.once("ready", () => {
   console.log(`Bot connecté : ${client.user.tag}`);
-  console.log(`Humeur actuelle : ${humeur}`);
   console.log(`Modèle OpenRouter : ${OPENROUTER_MODEL}`);
+  console.log(`Météo : ${WEATHER_CITY}, ${WEATHER_COUNTRY}`);
   console.log(`Chance spontanée : ${SPONTANEOUS_CHANCE}%`);
-  console.log(`Relance silence : entre ${IDLE_MIN_MINUTES} et ${IDLE_MAX_MINUTES} minutes`);
-
-  setInterval(gererRelancesSilence, 60 * 1000);
+  setInterval(relancesSilence, 60 * 1000);
 });
 
 client.on("messageCreate", async (message) => {
   try {
     if (message.author.bot) return;
     if (!message.guild) return;
-    if (!salonAutorise(message)) return;
 
     const texte = message.content || "";
     const texteMin = texte.toLowerCase();
 
-    enregistrerActiviteHumaine(message);
-
-    if (texteMin.startsWith("!context")) {
-      return gererCommandeContext(message, texte);
-    }
-
-    if (texteMin.startsWith("!blague")) {
-      return gererCommandeBlague(message, texte);
-    }
-
-    if (texteMin.startsWith("!humeur")) {
-      return gererCommandeHumeur(message, texte);
-    }
-
-    if (texteMin === "!humeur-actuelle") {
-      return message.reply(`Humeur actuelle : ${humeur}`);
-    }
+    enregistrerActivite(message);
 
     if (texteMin === "!aide-herve") {
       return message.reply(`
-Commandes disponibles :
-!context ajouter ...
-!context liste
-!context supprimer 1
+Commandes principales :
+!memoire
+!droit ajouter @user
+!droit supprimer @user
+!droit liste
 
-!blague ajouter ...
-!blague liste
-!blague supprimer 1
+!dire #salon @user instruction
+!annonce #salon instruction
+!question #salon @user thème
+!meteo
 
-!humeur collegue
-!humeur fatigue
-!humeur corporate
-!humeur calme
-!humeur beaufgentil
-!humeur-actuelle
+Exemples mémoire :
+!lieu description On est dans un bâtiment de deux étages avec un sous-sol.
+!lieu detail Le sous-sol a une ambiance de niveau bonus.
+!salle ajouter Salle Océan | étage 1 | grande salle de réunion
+!personne ajouter Alexis
+!personne voiture Alexis Peugeot 308
+!personne aime Alexis les bugs impossibles à reproduire
+!personne anecdote Alexis Il y a deux Alexis dans le service.
+!expression ajouter C'est sûrement le cache.
+!blague ajouter Avec deux Alexis, même l'annuaire demande une précision.
 `);
     }
 
-    if (contientSujetInterdit(texte)) return;
+    if (texteMin.startsWith("!droit")) return gererDroit(message, texte);
+    if (texteMin === "!meteo") return gererMeteo(message);
+
+    if (
+      texteMin.startsWith("!memoire")
+      || texteMin.startsWith("!lieu")
+      || texteMin.startsWith("!salle")
+      || texteMin.startsWith("!personne")
+      || texteMin.startsWith("!anecdote")
+      || texteMin.startsWith("!expression")
+      || texteMin.startsWith("!blague")
+      || texteMin.startsWith("!style")
+    ) {
+      const handled = await gererMemoire(message, texte);
+      if (handled !== false) return handled;
+    }
+
+    if (texteMin.startsWith("!dire ")) return gererDire(message, texte);
+    if (texteMin.startsWith("!annonce ")) return gererAnnonce(message, texte);
+    if (texteMin.startsWith("!question ")) return gererQuestion(message, texte);
+
+    if (estSujetInterdit(texte)) return;
 
     const estMentionne = message.mentions.has(client.user);
 
     if (estMentionne) {
-      const reponse = await genererReponseIA(
-        texte,
-        "Le bot a été mentionné directement."
-      );
+      const contenu = await genererMessageIA({
+        instruction: texte,
+        contexte: "le bot a été mentionné directement",
+        inclureMeteo: texteMin.includes("météo") || texteMin.includes("meteo")
+      });
 
       const etat = salonsSuivis.get(message.channel.id);
-      if (etat) {
-        etat.lastBotMessageAt = Date.now();
-        salonsSuivis.set(message.channel.id, etat);
-      }
+      if (etat) etat.lastBotMessageAt = Date.now();
 
-      return message.reply(reponse);
+      return message.reply(contenu);
     }
 
-    const maintenant = Date.now();
     const etat = salonsSuivis.get(message.channel.id);
+    if (etat && Date.now() - etat.lastBotMessageAt < BOT_COOLDOWN_MS) return;
 
-    if (etat && maintenant - etat.lastBotMessageAt < BOT_COOLDOWN_MS) return;
+    if (!contientMotDeclencheur(texte)) return;
+    if (Math.random() > SPONTANEOUS_CHANCE / 100) return;
 
-    const aMotDeclencheur = contientMotDeclencheur(texte);
-    const chanceOk = Math.random() < SPONTANEOUS_CHANCE / 100;
+    const contenu = await genererMessageIA({
+      instruction: `Réagis à ce message de façon courte, drôle et naturelle : ${texte}`,
+      contexte: "intervention spontanée dans une discussion Discord",
+      inclureMeteo: Math.random() < 0.15
+    });
 
-    if (!aMotDeclencheur && !chanceOk) return;
-    if (!chanceOk) return;
+    if (etat) etat.lastBotMessageAt = Date.now();
 
-    const interventionOk = await doitIntervenirIA(texte);
-    if (!interventionOk) return;
-
-    const reponse = await genererReponseIA(
-      texte,
-      "Le bot intervient spontanément dans une discussion Discord."
-    );
-
-    if (etat) {
-      etat.lastBotMessageAt = maintenant;
-      salonsSuivis.set(message.channel.id, etat);
-    }
-
-    return message.reply(reponse);
+    return message.reply(contenu);
   } catch (error) {
     console.error("Erreur messageCreate :", error);
   }
