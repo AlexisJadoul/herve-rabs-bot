@@ -1,0 +1,28 @@
+{
+  "admins": [],
+  "memory": {
+    "lieu": {
+      "nom": "Le service",
+      "ville": "Redon",
+      "description": "",
+      "details": [],
+      "salles": []
+    },
+    "personnes": [],
+    "anecdotes": [],
+    "expressions": [],
+    "blagues": [],
+    "styles": {
+      "bienvenue": [],
+      "relance": [],
+      "matin": [],
+      "reunion": []
+    }
+  },
+  "queue": [],
+  "history": [],
+  "recent": {
+    "themes": [],
+    "responses": []
+  }
+}
